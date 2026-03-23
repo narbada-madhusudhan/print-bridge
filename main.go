@@ -528,6 +528,216 @@ func printToUSB(printerName string, data []byte) error {
 	return nil
 }
 
+// ─── Self-Update ───────────────────────────────────────────────────────────
+
+const GitHubRepo = "narbada-madhusudhan/print-bridge"
+
+type UpdateInfo struct {
+	Available      bool   `json:"available"`
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	DownloadURL    string `json:"download_url,omitempty"`
+	ReleaseURL     string `json:"release_url,omitempty"`
+}
+
+var (
+	cachedUpdate     *UpdateInfo
+	cachedUpdateTime time.Time
+	updateMu         sync.Mutex
+)
+
+func getAssetSuffix() string {
+	switch {
+	case runtime.GOOS == "windows":
+		return "windows-amd64.exe"
+	case runtime.GOOS == "darwin" && runtime.GOARCH == "arm64":
+		return "mac-arm64"
+	case runtime.GOOS == "darwin":
+		return "mac-amd64"
+	default:
+		return "linux-amd64"
+	}
+}
+
+func checkForUpdate() (*UpdateInfo, error) {
+	updateMu.Lock()
+	defer updateMu.Unlock()
+
+	// Cache for 1 hour
+	if cachedUpdate != nil && time.Since(cachedUpdateTime) < time.Hour {
+		return cachedUpdate, nil
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", GitHubRepo))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, err
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	current := strings.TrimPrefix(Version, "v")
+	suffix := getAssetSuffix()
+
+	info := &UpdateInfo{
+		Available:      latest != current && latest > current,
+		CurrentVersion: Version,
+		LatestVersion:  release.TagName,
+		ReleaseURL:     release.HTMLURL,
+	}
+
+	for _, asset := range release.Assets {
+		if strings.HasSuffix(asset.Name, suffix) {
+			info.DownloadURL = asset.BrowserDownloadURL
+			break
+		}
+	}
+
+	cachedUpdate = info
+	cachedUpdateTime = time.Now()
+	return info, nil
+}
+
+func performUpdate(downloadURL string) error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("cannot determine executable path: %w", err)
+	}
+	exePath, err = filepath.EvalSymlinks(exePath)
+	if err != nil {
+		return fmt.Errorf("cannot resolve executable path: %w", err)
+	}
+
+	log.Printf("[update] Downloading from %s", downloadURL)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download returned %d", resp.StatusCode)
+	}
+
+	// Write to temp file next to current binary
+	tmpPath := exePath + ".update"
+	tmpFile, err := os.Create(tmpPath)
+	if err != nil {
+		return fmt.Errorf("cannot create temp file: %w", err)
+	}
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
+				tmpFile.Close()
+				os.Remove(tmpPath)
+				return fmt.Errorf("write failed: %w", writeErr)
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	tmpFile.Close()
+
+	// Make executable
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod failed: %w", err)
+	}
+
+	// Replace old binary
+	backupPath := exePath + ".backup"
+	os.Remove(backupPath) // clean old backup
+	if err := os.Rename(exePath, backupPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("backup failed: %w", err)
+	}
+	if err := os.Rename(tmpPath, exePath); err != nil {
+		// Restore backup
+		os.Rename(backupPath, exePath)
+		return fmt.Errorf("replace failed: %w", err)
+	}
+	os.Remove(backupPath)
+
+	log.Printf("[update] Updated successfully. Restart to use new version.")
+
+	// Restart: exec the new binary (replaces current process)
+	execErr := syscallExec(exePath)
+	if execErr != nil {
+		log.Printf("[update] Auto-restart failed: %v — please restart manually", execErr)
+	}
+	return nil
+}
+
+// syscallExec replaces the current process with a new one (Unix only)
+// On Windows, we just exit and let the auto-start mechanism restart us
+func syscallExec(path string) error {
+	if runtime.GOOS == "windows" {
+		// Windows: start new process and exit
+		cmd := exec.Command(path)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Start()
+		os.Exit(0)
+		return nil
+	}
+	// Unix: replace current process
+	return fmt.Errorf("please restart print-bridge to use the new version")
+}
+
+// GET /update/check — check for updates
+func handleUpdateCheck(w http.ResponseWriter, _ *http.Request) {
+	info, err := checkForUpdate()
+	if err != nil {
+		writeJSON(w, 200, Response{Success: true, Data: &UpdateInfo{
+			Available:      false,
+			CurrentVersion: Version,
+			LatestVersion:  Version,
+		}})
+		return
+	}
+	writeJSON(w, 200, Response{Success: true, Data: info})
+}
+
+// POST /update/apply — download and apply update
+func handleUpdateApply(w http.ResponseWriter, _ *http.Request) {
+	info, err := checkForUpdate()
+	if err != nil || !info.Available || info.DownloadURL == "" {
+		writeJSON(w, 400, Response{Success: false, Error: "No update available"})
+		return
+	}
+
+	writeJSON(w, 200, Response{Success: true, Message: "Updating... Print Bridge will restart."})
+
+	// Apply update in background (response already sent)
+	go func() {
+		time.Sleep(500 * time.Millisecond) // let response flush
+		if err := performUpdate(info.DownloadURL); err != nil {
+			log.Printf("[update] Failed: %v", err)
+		}
+	}()
+}
+
 // ─── Auto-Start Install/Uninstall ──────────────────────────────────────────
 
 func installAutoStart() error {
@@ -751,6 +961,8 @@ func main() {
 	mux.HandleFunc("/print/network", corsMiddleware(cm, handlePrintNetwork))
 	mux.HandleFunc("/print/usb", corsMiddleware(cm, handlePrintUSB))
 	mux.HandleFunc("/test", corsMiddleware(cm, handleTest))
+	mux.HandleFunc("/update/check", corsMiddleware(cm, handleUpdateCheck))
+	mux.HandleFunc("/update/apply", corsMiddleware(cm, handleUpdateApply))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", Port)
 
@@ -759,16 +971,27 @@ func main() {
 	fmt.Printf("  ║   Print Bridge v%-22s║\n", Version)
 	fmt.Printf("  ║   http://%-28s║\n", addr)
 	fmt.Println("  ╠═══════════════════════════════════════╣")
-	fmt.Println("  ║  GET  /             Status             ║")
-	fmt.Println("  ║  GET  /printers     List printers      ║")
-	fmt.Println("  ║  POST /print/network  Network printer  ║")
-	fmt.Println("  ║  POST /print/usb      USB printer      ║")
-	fmt.Println("  ║  POST /test           Test connection   ║")
+	fmt.Println("  ║  GET  /              Status            ║")
+	fmt.Println("  ║  GET  /printers      List printers     ║")
+	fmt.Println("  ║  POST /print/network Network printer   ║")
+	fmt.Println("  ║  POST /print/usb     USB printer       ║")
+	fmt.Println("  ║  POST /test          Test connection    ║")
+	fmt.Println("  ║  GET  /update/check  Check for updates ║")
+	fmt.Println("  ║  POST /update/apply  Apply update      ║")
 	fmt.Println("  ╚═══════════════════════════════════════╝")
 	if cfg.HotelID != "" {
 		fmt.Printf("  Hotel: %s\n", cfg.HotelID)
 	}
-	fmt.Println()
 
+	// Check for updates in background on startup
+	go func() {
+		info, err := checkForUpdate()
+		if err == nil && info.Available {
+			fmt.Printf("\n  ⬆ Update available: %s → %s\n", info.CurrentVersion, info.LatestVersion)
+			fmt.Printf("  ⬆ Download: %s\n\n", info.ReleaseURL)
+		}
+	}()
+
+	fmt.Println()
 	log.Fatal(http.ListenAndServe(addr, mux))
 }
