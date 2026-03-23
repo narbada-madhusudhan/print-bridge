@@ -32,10 +32,10 @@ import (
 	"time"
 )
 
-const (
-	Version = "1.0.0"
-	Port    = 9120
-)
+// Version is set at build time via: go build -ldflags "-X main.Version=vX.Y.Z"
+var Version = "dev"
+
+const Port = 9120
 
 // Root public key — baked in at compile time via ldflags
 // Override with: go build -ldflags "-X main.RootPublicKeyB64=..."
