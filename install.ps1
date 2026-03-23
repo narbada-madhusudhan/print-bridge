@@ -4,8 +4,22 @@
 $ErrorActionPreference = "Stop"
 $Repo = "narbada-madhusudhan/nme-print-bridge"
 $InstallDir = "$env:LOCALAPPDATA\NME Print Bridge"
+$ExePath = "$InstallDir\nme-print-bridge.exe"
 $Binary = "print-bridge-windows-amd64.exe"
 $URL = "https://github.com/$Repo/releases/latest/download/$Binary"
+
+# Handle --uninstall
+if ($args -contains "--uninstall" -or $args -contains "uninstall") {
+    Write-Host "`n  Uninstalling NME Print Bridge..."
+    if (Test-Path $ExePath) {
+        & $ExePath --uninstall 2>$null
+        Remove-Item $ExePath -Force
+        Write-Host "  OK Uninstalled" -ForegroundColor Green
+    } else {
+        Write-Host "  Not installed at $ExePath"
+    }
+    exit 0
+}
 
 Write-Host ""
 Write-Host "  =======================================" -ForegroundColor Cyan
@@ -13,11 +27,19 @@ Write-Host "     NME Print Bridge - Installer        " -ForegroundColor Cyan
 Write-Host "  =======================================" -ForegroundColor Cyan
 Write-Host ""
 
+# Stop existing if upgrading
+if (Test-Path $ExePath) {
+    Write-Host "  -> Stopping existing installation..."
+    & $ExePath --uninstall 2>$null
+    Remove-Item $ExePath -Force
+}
+
 # Download
 Write-Host "  -> Downloading latest release..."
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $ExePath = "$InstallDir\nme-print-bridge.exe"
 Invoke-WebRequest -Uri $URL -OutFile $ExePath -UseBasicParsing
+Unblock-File -Path $ExePath
 
 if (-not (Test-Path $ExePath)) {
     Write-Host "  X Download failed" -ForegroundColor Red

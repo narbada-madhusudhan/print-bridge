@@ -13,12 +13,35 @@ set -e
 
 REPO="narbada-madhusudhan/nme-print-bridge"
 INSTALL_DIR="$HOME/Applications"
+BINARY="$INSTALL_DIR/nme-print-bridge"
+
+# Handle --uninstall flag
+if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+  echo ""
+  echo "  Uninstalling NME Print Bridge..."
+  if [ -f "$BINARY" ]; then
+    "$BINARY" --uninstall 2>/dev/null || true
+    rm -f "$BINARY"
+    echo "  ✓ Uninstalled"
+  else
+    echo "  Not installed at $BINARY"
+  fi
+  echo ""
+  exit 0
+fi
 
 echo ""
 echo "  ╔═══════════════════════════════════════╗"
 echo "  ║     NME Print Bridge — Installer      ║"
 echo "  ╚═══════════════════════════════════════╝"
 echo ""
+
+# Stop existing installation if upgrading
+if [ -f "$BINARY" ]; then
+  echo "  → Stopping existing installation..."
+  "$BINARY" --uninstall 2>/dev/null || true
+  rm -f "$BINARY"
+fi
 
 # Detect OS and architecture
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
