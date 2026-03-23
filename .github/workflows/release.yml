@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            suffix: mac-arm64
+          - goos: darwin
+            goarch: amd64
+            suffix: mac-amd64
+          - goos: windows
+            goarch: amd64
+            suffix: windows-amd64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          go build -ldflags "-X main.RootPublicKeyB64=${{ secrets.ROOT_PUBLIC_KEY }} -X main.Version=${{ github.ref_name }}" \
+            -o print-bridge-${{ matrix.suffix }} main.go
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: print-bridge-${{ matrix.suffix }}
+          path: print-bridge-${{ matrix.suffix }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            print-bridge-mac-arm64/print-bridge-mac-arm64
+            print-bridge-mac-amd64/print-bridge-mac-amd64
+            print-bridge-windows-amd64.exe/print-bridge-windows-amd64.exe
+          generate_release_notes: true
