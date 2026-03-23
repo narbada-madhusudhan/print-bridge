@@ -65,12 +65,13 @@ jobs:
           - arch: amd64
             suffix: mac-amd64
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download binary
         uses: actions/download-artifact@v4
         with:
           name: print-bridge-${{ matrix.suffix }}
-
-      - uses: actions/checkout@v4
+          path: bin
 
       - name: Create .app bundle
         run: |
@@ -78,8 +79,8 @@ jobs:
           mkdir -p "${APP_NAME}/Contents/MacOS"
           mkdir -p "${APP_NAME}/Contents/Resources"
 
-          # Copy binary
-          cp print-bridge-${{ matrix.suffix }} "${APP_NAME}/Contents/MacOS/print-bridge"
+          # Copy binary (download-artifact puts file in bin/ dir)
+          cp bin/print-bridge-${{ matrix.suffix }} "${APP_NAME}/Contents/MacOS/print-bridge"
           chmod +x "${APP_NAME}/Contents/MacOS/print-bridge"
 
           # Copy icon
