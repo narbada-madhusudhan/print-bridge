@@ -75,15 +75,22 @@ function Install-PrintBridge {
 
     Write-Host "  OK Downloaded to $ExePath" -ForegroundColor Green
 
-    # Install auto-start
+    # Remove old .bat from Startup folder (caused PowerShell window flash)
+    $StartupDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    Remove-Item "$StartupDir\NME Print Bridge.bat" -Force -ErrorAction SilentlyContinue
+
+    # Install auto-start (creates .vbs in Startup — no window flash)
     Write-Host "  -> Setting up auto-start..."
     try { & $ExePath --install } catch {
         Write-Host "  ! Auto-start setup failed: $_" -ForegroundColor Yellow
     }
 
-    # Start the bridge as a hidden background process
+    # Start the bridge completely hidden — use VBS to avoid any window flash
     Write-Host "  -> Starting bridge..."
-    Start-Process -FilePath $ExePath -WindowStyle Hidden
+    $VbsLauncher = "$InstallDir\launch.vbs"
+    Set-Content -Path $VbsLauncher -Value "CreateObject(""Wscript.Shell"").Run """"""$ExePath"""""", 0, False"
+    wscript.exe $VbsLauncher
+    Remove-Item $VbsLauncher -Force -ErrorAction SilentlyContinue
 
     # Verify the bridge is actually running
     Write-Host "  -> Verifying bridge is running..."
@@ -101,10 +108,21 @@ function Install-PrintBridge {
         }
     }
 
+    # Get installed version from health endpoint
+    $Version = "unknown"
+    if ($Running) {
+        try {
+            $Health = Invoke-WebRequest -Uri "http://localhost:9120/" -UseBasicParsing -TimeoutSec 3
+            $VersionMatch = [regex]::Match($Health.Content, '"version"\s*:\s*"([^"]+)"')
+            if ($VersionMatch.Success) { $Version = $VersionMatch.Groups[1].Value }
+        } catch {}
+    }
+
     Write-Host ""
     if ($Running) {
         Write-Host "  =======================================" -ForegroundColor Green
         Write-Host "  OK Installation complete!              " -ForegroundColor Green
+        Write-Host "  Version: $Version" -ForegroundColor Green
         Write-Host "                                         "
         Write-Host "  NME Print Bridge is now running and    "
         Write-Host "  will start automatically on login.     "
