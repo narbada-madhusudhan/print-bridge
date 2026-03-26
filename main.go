@@ -863,12 +863,20 @@ func performUpdate(downloadURL string) error {
 // Windows: starts a new process and exits (service manager restarts).
 func syscallExec(path string) error {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command(path)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Start(); err != nil {
-			return fmt.Errorf("failed to start new process: %w", err)
+		// Use wscript + VBS to restart silently (no console window flash).
+		// Write a temp .vbs that launches the new binary hidden, then exit.
+		vbsPath := path + ".restart.vbs"
+		vbs := fmt.Sprintf("WScript.Sleep 500\r\nCreateObject(\"Wscript.Shell\").Run \"\"\"%s\"\"\", 0, False\r\n", path)
+		if err := os.WriteFile(vbsPath, []byte(vbs), 0644); err != nil {
+			// Fallback to exec.Command if VBS write fails
+			cmd := exec.Command(path)
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("failed to start new process: %w", err)
+			}
+			os.Exit(0)
+			return nil
 		}
+		exec.Command("wscript.exe", vbsPath).Start()
 		os.Exit(0)
 		return nil
 	}
@@ -1029,6 +1037,11 @@ func migrateWindowsStartup() {
 	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 	batPath := filepath.Join(startupDir, "NME Print Bridge.bat")
 	vbsPath := filepath.Join(startupDir, "NME Print Bridge.vbs")
+
+	// Clean up temp restart VBS from auto-update
+	if exePath, err := os.Executable(); err == nil {
+		os.Remove(exePath + ".restart.vbs")
+	}
 
 	// Remove legacy .bat if it exists
 	if _, err := os.Stat(batPath); err == nil {
