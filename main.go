@@ -1004,11 +1004,15 @@ func installWindowsStartup(exePath string) error {
 	home, _ := os.UserHomeDir()
 	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
 
-	// Create a .bat file in Startup folder that runs the binary minimized
-	batPath := filepath.Join(startupDir, "NME Print Bridge.bat")
-	bat := fmt.Sprintf("@echo off\r\nstart /min \"\" \"%s\"\r\n", exePath)
+	// Remove old .bat if upgrading from previous version
+	oldBat := filepath.Join(startupDir, "NME Print Bridge.bat")
+	os.Remove(oldBat)
 
-	if err := os.WriteFile(batPath, []byte(bat), 0644); err != nil {
+	// Use .vbs instead of .bat — runs the exe with zero visible windows
+	vbsPath := filepath.Join(startupDir, "NME Print Bridge.vbs")
+	vbs := fmt.Sprintf("CreateObject(\"Wscript.Shell\").Run \"\"\"%s\"\"\", 0, False\r\n", exePath)
+
+	if err := os.WriteFile(vbsPath, []byte(vbs), 0644); err != nil {
 		return fmt.Errorf("failed to create startup script: %w", err)
 	}
 
@@ -1020,8 +1024,9 @@ func installWindowsStartup(exePath string) error {
 
 func uninstallWindowsStartup() error {
 	home, _ := os.UserHomeDir()
-	batPath := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "NME Print Bridge.bat")
-	os.Remove(batPath)
+	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	os.Remove(filepath.Join(startupDir, "NME Print Bridge.vbs"))
+	os.Remove(filepath.Join(startupDir, "NME Print Bridge.bat")) // clean up old format
 	fmt.Println("  ✓ Auto-start removed")
 	return nil
 }
