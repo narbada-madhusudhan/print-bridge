@@ -1022,6 +1022,34 @@ func installWindowsStartup(exePath string) error {
 	return nil
 }
 
+// migrateWindowsStartup removes legacy .bat and ensures .vbs auto-start exists.
+// Runs on every startup so auto-updates (which skip --install) also get migrated.
+func migrateWindowsStartup() {
+	home, _ := os.UserHomeDir()
+	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+	batPath := filepath.Join(startupDir, "NME Print Bridge.bat")
+	vbsPath := filepath.Join(startupDir, "NME Print Bridge.vbs")
+
+	// Remove legacy .bat if it exists
+	if _, err := os.Stat(batPath); err == nil {
+		os.Remove(batPath)
+		log.Println("[migrate] Removed legacy .bat startup file")
+	}
+
+	// Ensure .vbs exists (may be missing after auto-update)
+	if _, err := os.Stat(vbsPath); os.IsNotExist(err) {
+		exePath, err := os.Executable()
+		if err != nil {
+			return
+		}
+		exePath, _ = filepath.EvalSymlinks(exePath)
+		vbs := fmt.Sprintf("CreateObject(\"Wscript.Shell\").Run \"\"\"%s\"\"\", 0, False\r\n", exePath)
+		if err := os.WriteFile(vbsPath, []byte(vbs), 0644); err == nil {
+			log.Println("[migrate] Created .vbs startup file")
+		}
+	}
+}
+
 func uninstallWindowsStartup() error {
 	home, _ := os.UserHomeDir()
 	startupDir := filepath.Join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
@@ -1100,6 +1128,11 @@ func main() {
 			os.Exit(1)
 		}
 		os.Exit(0)
+	}
+
+	// Migrate: clean up legacy .bat startup file and ensure .vbs exists
+	if runtime.GOOS == "windows" {
+		migrateWindowsStartup()
 	}
 
 	// Load or create config
