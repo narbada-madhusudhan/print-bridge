@@ -41,10 +41,15 @@ function Install-PrintBridge {
     Write-Host "  =======================================" -ForegroundColor Cyan
     Write-Host ""
 
+    # Always kill any running bridge process and clean up legacy .bat first
+    $StartupDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    Write-Host "  -> Stopping any running bridge..."
+    Stop-Bridge
+    # Remove legacy .bat that causes PowerShell window flash on boot
+    Remove-Item "$StartupDir\NME Print Bridge.bat" -Force -ErrorAction SilentlyContinue
+
     # Stop existing if upgrading
     if (Test-Path $ExePath) {
-        Write-Host "  -> Stopping existing installation..."
-        Stop-Bridge
         try { & $ExePath --uninstall 2>$null } catch {}
         Stop-Bridge
         Remove-Bridge
@@ -74,10 +79,6 @@ function Install-PrintBridge {
     }
 
     Write-Host "  OK Downloaded to $ExePath" -ForegroundColor Green
-
-    # Remove old .bat from Startup folder (caused PowerShell window flash)
-    $StartupDir = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
-    Remove-Item "$StartupDir\NME Print Bridge.bat" -Force -ErrorAction SilentlyContinue
 
     # Install auto-start (creates .vbs in Startup — no window flash)
     Write-Host "  -> Setting up auto-start..."
