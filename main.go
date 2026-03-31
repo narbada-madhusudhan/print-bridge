@@ -140,6 +140,18 @@ func main() {
 	mux.HandleFunc("/test", corsMiddleware(cm, handleTest))
 	mux.HandleFunc("/update/check", corsMiddleware(cm, handleUpdateCheck))
 	mux.HandleFunc("/update/apply", corsMiddleware(cm, handleUpdateApply))
+	mux.HandleFunc("/config/poll", corsMiddleware(cm, func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			handleGetPollConfig(w, r)
+		case "POST":
+			handleSetPollConfig(w, r)
+		case "DELETE":
+			handleDeletePollConfig(w, r)
+		default:
+			writeJSON(w, 405, Response{Success: false, Error: "Method not allowed"})
+		}
+	}))
 
 	addr := fmt.Sprintf("127.0.0.1:%d", DefaultPort)
 

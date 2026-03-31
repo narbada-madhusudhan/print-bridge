@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"runtime"
@@ -127,6 +128,87 @@ func handlePrintUSB(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, 200, Response{Success: true, Message: fmt.Sprintf("Sent to %s", req.Printer)})
 }
+
+// ─── Config Endpoints ──────────────────────────────────────────────────────
+
+type PollConfigReq struct {
+	AdminAPIURL         string `json:"admin_api_url"`
+	ServiceKey          string `json:"service_key"`
+	PollEnabled         bool   `json:"poll_enabled"`
+	PollIntervalSeconds int    `json:"poll_interval_seconds"`
+}
+
+func handleGetPollConfig(w http.ResponseWriter, _ *http.Request) {
+	cfg := loadConfig()
+	writeJSON(w, 200, Response{Success: true, Data: map[string]any{
+		"admin_api_url":       cfg.AdminAPIURL,
+		"poll_enabled":        cfg.PollEnabled,
+		"poll_interval_seconds": cfg.PollIntervalSeconds,
+		"has_service_key":     cfg.ServiceKey != "",
+	}})
+}
+
+func handleSetPollConfig(w http.ResponseWriter, r *http.Request) {
+	var req PollConfigReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, 400, Response{Success: false, Error: "Invalid JSON"})
+		return
+	}
+	if req.AdminAPIURL == "" || req.ServiceKey == "" {
+		writeJSON(w, 400, Response{Success: false, Error: "admin_api_url and service_key are required"})
+		return
+	}
+	if req.PollIntervalSeconds < MinPollInterval {
+		req.PollIntervalSeconds = DefaultPollInterval
+	}
+
+	// Update config file
+	cfg := loadConfig()
+	cfg.AdminAPIURL = req.AdminAPIURL
+	cfg.ServiceKey = req.ServiceKey
+	cfg.PollEnabled = req.PollEnabled
+	cfg.PollIntervalSeconds = req.PollIntervalSeconds
+	saveConfig(cfg)
+
+	// Restart poller with new config
+	if old := activePollerPtr.Load(); old != nil {
+		old.Stop()
+		log.Println("[poller] Stopped old poller for config update")
+	}
+
+	if cfg.PollEnabled {
+		poller := NewPoller(cfg)
+		activePollerPtr.Store(poller)
+		poller.Start()
+		log.Printf("[poller] Started with new config — polling %s every %ds",
+			cfg.AdminAPIURL, cfg.PollIntervalSeconds)
+	} else {
+		activePollerPtr.Store(nil)
+		log.Println("[poller] Polling disabled via config update")
+	}
+
+	writeJSON(w, 200, Response{Success: true, Message: "Poll config updated"})
+}
+
+func handleDeletePollConfig(w http.ResponseWriter, _ *http.Request) {
+	// Stop poller
+	if old := activePollerPtr.Load(); old != nil {
+		old.Stop()
+		activePollerPtr.Store(nil)
+		log.Println("[poller] Stopped — polling disabled")
+	}
+
+	// Clear polling config
+	cfg := loadConfig()
+	cfg.AdminAPIURL = ""
+	cfg.ServiceKey = ""
+	cfg.PollEnabled = false
+	saveConfig(cfg)
+
+	writeJSON(w, 200, Response{Success: true, Message: "Poll config cleared"})
+}
+
+// ─── Test Handler ──────────────────────────────────────────────────────────
 
 func handleTest(w http.ResponseWriter, r *http.Request) {
 	var req TestReq

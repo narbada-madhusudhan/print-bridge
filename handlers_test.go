@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -393,5 +394,112 @@ func TestWriteJSON(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&body)
 	if !body.Success || body.Message != "created" {
 		t.Errorf("unexpected body: %+v", body)
+	}
+}
+
+// ─── Poll Config Endpoints ─────────────────────────────────────────────────
+
+func TestHandleSetPollConfig(t *testing.T) {
+	// Use temp HOME so we don't touch real config
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	body := `{"admin_api_url":"https://admin.test.com","service_key":"test-key-123","poll_enabled":true,"poll_interval_seconds":10}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/config/poll", strings.NewReader(body))
+	handleSetPollConfig(w, r)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp Response
+	json.NewDecoder(w.Body).Decode(&resp)
+	if !resp.Success {
+		t.Error("expected success")
+	}
+
+	// Verify config was saved
+	cfg := loadConfig()
+	if cfg.AdminAPIURL != "https://admin.test.com" {
+		t.Errorf("AdminAPIURL = %q", cfg.AdminAPIURL)
+	}
+	if cfg.ServiceKey != "test-key-123" {
+		t.Errorf("ServiceKey = %q", cfg.ServiceKey)
+	}
+	if !cfg.PollEnabled {
+		t.Error("PollEnabled should be true")
+	}
+
+	// Verify poller was started
+	p := activePollerPtr.Load()
+	if p == nil {
+		t.Error("poller should be started")
+	} else {
+		p.Stop()
+		activePollerPtr.Store(nil)
+	}
+}
+
+func TestHandleSetPollConfig_MissingFields(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "/config/poll", strings.NewReader(`{"admin_api_url":"https://test.com"}`))
+	handleSetPollConfig(w, r)
+
+	if w.Code != 400 {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestHandleGetPollConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	// Save a config first
+	saveConfig(Config{AdminAPIURL: "https://test.com", ServiceKey: "key", PollEnabled: true, PollIntervalSeconds: 5})
+
+	w := httptest.NewRecorder()
+	handleGetPollConfig(w, httptest.NewRequest("GET", "/config/poll", nil))
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	var resp Response
+	json.NewDecoder(w.Body).Decode(&resp)
+	data := resp.Data.(map[string]any)
+	if data["poll_enabled"] != true {
+		t.Error("expected poll_enabled=true")
+	}
+	if data["has_service_key"] != true {
+		t.Error("expected has_service_key=true")
+	}
+}
+
+func TestHandleDeletePollConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	saveConfig(Config{AdminAPIURL: "https://test.com", ServiceKey: "key", PollEnabled: true, PollIntervalSeconds: 5})
+
+	w := httptest.NewRecorder()
+	handleDeletePollConfig(w, httptest.NewRequest("DELETE", "/config/poll", nil))
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d", w.Code)
+	}
+
+	cfg := loadConfig()
+	if cfg.PollEnabled {
+		t.Error("PollEnabled should be false")
+	}
+	if cfg.ServiceKey != "" {
+		t.Error("ServiceKey should be cleared")
 	}
 }
