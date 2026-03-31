@@ -52,11 +52,10 @@ func NewCertManager(cfg Config) (*CertManager, error) {
 		cachePath:      filepath.Join(configDir(), CertCacheFile),
 	}
 
-	// Allow localhost origins in dev mode only
-	if isDevMode() {
-		for _, origin := range LocalhostOrigins {
-			cm.allowedOrigins[origin] = true
-		}
+	// Always allow localhost origins — bridge binds to 127.0.0.1 only,
+	// so only local processes can reach it regardless of origin.
+	for _, origin := range LocalhostOrigins {
+		cm.allowedOrigins[origin] = true
 	}
 
 	// Built-in production origins (hardcoded for this version)
@@ -171,12 +170,16 @@ func (cm *CertManager) applyCert(cert *SignedCert) {
 
 	cm.cert = cert
 	cm.allowedOrigins = make(map[string]bool)
-	if isDevMode() {
-		for _, origin := range LocalhostOrigins {
-			cm.allowedOrigins[origin] = true
-		}
+	// Always allow localhost — bridge only binds to 127.0.0.1
+	for _, origin := range LocalhostOrigins {
+		cm.allowedOrigins[origin] = true
 	}
 	for _, origin := range BuiltInAllowedOrigins {
+		cm.allowedOrigins[origin] = true
+	}
+	// Config-based origins (from /config/poll)
+	cfg := loadConfig()
+	for _, origin := range cfg.AllowedOrigins {
 		cm.allowedOrigins[origin] = true
 	}
 	for _, origin := range cert.Payload.AllowedOrigins {
