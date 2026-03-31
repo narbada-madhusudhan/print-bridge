@@ -47,8 +47,8 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "0"
         run: |
-          go build -ldflags "-s -w -X main.RootPublicKeyB64=${{ secrets.ROOT_PUBLIC_KEY }} -X main.Version=${{ github.ref_name }} ${{ matrix.ldflags_extra }}" \
-            -o print-bridge-${{ matrix.suffix }} main.go
+          go build -ldflags "-s -w -X main.RootPublicKeyB64=${{ secrets.ROOT_PUBLIC_KEY }} -X main.Version=${{ github.ref_name }} -X main.DevMode=false ${{ matrix.ldflags_extra }}" \
+            -o print-bridge-${{ matrix.suffix }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
